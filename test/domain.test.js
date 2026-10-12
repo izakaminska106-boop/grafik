@@ -36,6 +36,17 @@ test("Październik 176 h, listopad 160 h i zespół 1056 h", () => {
   assert.equal(nominal("2026-11"), 160 * 60);
   assert.equal(nominal("2026-10") * 6, 1056 * 60);
 });
+for (const [month, hours] of [
+  ["2026-10", 176],
+  ["2026-11", 160],
+  ["2026-08", 160],
+  ["2026-12", 160],
+]) {
+  test(`Wymiar miesięczny ${month}: ${hours} h dla pełnego etatu`, () => {
+    assert.equal(nominal(month, 1), hours * 60);
+    assert.equal(nominal(month, 0.5), hours * 60 * 0.5);
+  });
+}
 test("Zmiana czasu Warszawa: 9 h jesienią, 7 h wiosną", () => {
   assert.equal(minutes(shift("2026-10-24", "WEN", "22:00", "06:00")), 540);
   assert.equal(minutes(shift("2026-03-28", "WEN", "22:00", "06:00")), 420);

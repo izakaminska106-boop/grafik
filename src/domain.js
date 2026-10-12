@@ -54,13 +54,12 @@ export function dates(month) {
 }
 export function nominal(month, fte = 1) {
   const hs = holidays(Number(month.slice(0, 4)));
-  return (
-    dates(month).filter(
-      (d) => DateTime.fromISO(d).weekday <= 5 && !hs.includes(d),
-    ).length *
-    480 *
-    fte
-  );
+  const days = dates(month);
+  const weekdays = days.filter((d) => DateTime.fromISO(d).weekday <= 5).length;
+  const nonSundayHolidays = days.filter(
+    (d) => hs.includes(d) && DateTime.fromISO(d).weekday !== 7,
+  ).length;
+  return (weekdays - nonSundayHolidays) * 480 * fte;
 }
 export function interval(s) {
   let start = DateTime.fromISO(s.date + "T" + s.start, { zone: ZONE }),
