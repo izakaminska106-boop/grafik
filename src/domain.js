@@ -329,6 +329,23 @@ export function validate(state, month) {
     for (let i = 0; i < all.length; i++) {
       const s = all[i],
         cur = interval(s);
+      const prev = all[i - 1],
+        p = prev ? interval(prev) : null;
+      // Check both ends of a pair before filtering month-local rules.
+      // Reading adjacent shifts does not establish completeness of the data.
+      if (prev && (s.date.startsWith(month) || prev.date.startsWith(month))) {
+        const rest = cur.start.diff(p.end, "hours").hours;
+        if (rest < 11)
+          add(
+            "error",
+            e.name,
+            s.date.startsWith(month) ? s.date : prev.date,
+            rest < 0 ? "Nakładanie zmian" : "Odpoczynek dobowy",
+            `${Math.round(rest * 100) / 100} h odpoczynku; wymagane 11 h. Od ${p.end.toISO()} do ${cur.start.toISO()} (Europe/Warsaw).`,
+            "Art. 132 KP",
+            "Przesuń początek zmiany lub wybierz zastępstwo.",
+          );
+      }
       if (!s.date.startsWith(month)) continue;
       const len = minutes(s);
       if (len > Math.min(720, e.maxDaily ?? 720))
@@ -351,20 +368,7 @@ export function validate(state, month) {
           "Profil indywidualny",
           "Przydziel zmianę dzienną.",
         );
-      const prev = all[i - 1];
       if (prev) {
-        const p = interval(prev),
-          rest = cur.start.diff(p.end, "hours").hours;
-        if (rest < 11)
-          add(
-            "error",
-            e.name,
-            s.date,
-            rest < 0 ? "Nakładanie zmian" : "Odpoczynek dobowy",
-            `${Math.round(rest * 100) / 100} h odpoczynku; wymagane 11 h.`,
-            "Art. 132 KP",
-            "Przesuń początek zmiany lub wybierz zastępstwo.",
-          );
         if (cur.start < p.start.plus({ hours: 24 }))
           add(
             "error",

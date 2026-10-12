@@ -76,3 +76,7 @@ Etap drugi PRD (generator, import XLSX i zamiany pracownicze) oraz etap trzeci (
 ### G-04: podział planu na granicy miesiąca
 
 Plan i planowe godziny nocne są przypisywane według przecięcia zmiany z miesiącem w Europe/Warsaw. Zmiana pozostaje jednym wpisem z jednym ID; raporty i XLSX pokazują jej część w każdym miesiącu. Obsada uwzględnia również nocne zapotrzebowanie rozpoczęte poprzedniego dnia (nakładające się wymagania nadal się sumują). Wykonanie zapisane tylko jako liczba minut pozostaje w miesiącu startu, bez domyślania się rzeczywistych godzin; podział wymaga rozszerzenia modelu. Raporty i XLSX oznaczają znane wykonanie zmian przekraczających miesiąc. Liczniki dni/zmian pozostają przy dacie rozpoczęcia.
+
+### G-05: odpoczynek dobowy na granicy miesiąca
+
+Walidacja sprawdza pary rzeczywiście zapisanych zmian pracownika, również gdy druga zmiana rozpoczyna się w kolejnym miesiącu lub roku. Naruszenie odpoczynku jest widoczne w obu raportach miesięcznych; komunikat wskazuje pracownika, koniec poprzedniej zmiany, początek następnej i czas faktycznie upływający w Europe/Warsaw. Nie powstają dodatkowe ani fikcyjne zmiany. Brak naruszeń w dostępnych wpisach nie potwierdza kompletności: bez istniejącego potwierdzenia `adjacentVerified` pozostaje ostrzeżenie „Niepełna walidacja”. To globalne potwierdzenie danych, nie automatyczne rozpoznawanie kompletności każdego miesiąca/pracownika ani potwierdzenie zgodności prawnej. Kontrola doby pracowniczej i odpoczynku tygodniowego zachowuje dotychczasowy zakres i ograniczenia.
