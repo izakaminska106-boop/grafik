@@ -44,6 +44,10 @@ import {
   holidays,
   effectiveAbsence,
   coverageIntervals,
+  monthPeriod,
+  dayPeriod,
+  minutesInPeriod,
+  belongsToMonth,
 } from "./domain.js";
 import "@fontsource/dm-sans/latin-ext-400.css";
 import "@fontsource/dm-sans/latin-ext-500.css";
@@ -304,7 +308,11 @@ function App() {
                 </td>
                 {ds.map((d) => {
                   const ss = state.shifts.filter(
-                    (s) => s.employeeId === e.id && s.date === d,
+                    (s) =>
+                      s.employeeId === e.id &&
+                      (s.date === d ||
+                        (!s.date.startsWith(month) &&
+                          minutesInPeriod(s, dayPeriod(d)) > 0)),
                   );
                   const bad = issues.some(
                     (v) =>
@@ -327,11 +335,15 @@ function App() {
                               "shift code-" + s.code + (bad ? " invalid" : "")
                             }
                             onClick={() => edit(e.id, d, s)}
-                            title={`${codeLabel[s.code]} ${s.start}–${s.end}${bad ? " · naruszenie reguł" : ""}`}
+                            title={`${codeLabel[s.code]} ${s.start}–${s.end}${s.date !== d ? ` · kontynuacja zmiany z ${s.date} · ${fmt(minutesInPeriod(s, dayPeriod(d)))} h w tym dniu` : ""}${bad ? " · naruszenie reguł" : ""}`}
                           >
                             <b>{s.code === "CUSTOM" ? "WŁ" : s.code}</b>
                             <small>
-                              {s.code === "W" ? "wolne" : `${s.start}–${s.end}`}
+                              {s.date !== d
+                                ? `kont. · ${fmt(minutesInPeriod(s, dayPeriod(d)))} h`
+                                : s.code === "W"
+                                  ? "wolne"
+                                  : `${s.start}–${s.end}`}
                             </small>
                             {s.locked && <LockKeyhole size={9} />}
                           </button>
@@ -529,6 +541,16 @@ function App() {
               )}
             </div>
           </div>
+          {stats.some((s) => s.actualAllocationIncomplete) && (
+            <div className="info-strip">
+              <Info size={17} />
+              <span>
+                Plan dzielony jest między miesiące. Wykonanie pozostaje w
+                miesiącu rozpoczęcia zmiany: brak rzeczywistych dat rozpoczęcia
+                i zakończenia do jego podziału.
+              </span>
+            </div>
+          )}
           {githubPages && (
             <div className="info-strip">
               <Info size={17} />
@@ -902,7 +924,7 @@ function App() {
                     {state.shifts
                       .filter(
                         (s) =>
-                          s.date.startsWith(month) &&
+                          belongsToMonth(s, month) &&
                           team.some((e) => e.id === s.employeeId),
                       )
                       .sort((a, b) =>
@@ -927,7 +949,10 @@ function App() {
                           <span>
                             {s.start} → {s.end}
                           </span>
-                          <span>{fmt(minutes(s))} h</span>
+                          <span>
+                            {fmt(minutesInPeriod(s, monthPeriod(month)))} h w
+                            miesiącu
+                          </span>
                           {s.locked && <LockKeyhole size={14} />}
                         </button>
                       ))}
@@ -1172,7 +1197,7 @@ function App() {
                       {state.shifts
                         .filter(
                           (s) =>
-                            s.date.startsWith(month) &&
+                            belongsToMonth(s, month) &&
                             absenceCodes.includes(s.code),
                         )
                         .map((s) => (
@@ -1194,7 +1219,8 @@ function App() {
                               </button>
                             </td>
                             <td>
-                              {fmt(minutes(s))} h · {s.start}–{s.end}
+                              {fmt(minutesInPeriod(s, monthPeriod(month)))} h w
+                              miesiącu · {s.start}–{s.end}
                             </td>
                             <td>
                               {s.code === "CH"
@@ -1217,7 +1243,7 @@ function App() {
                   </table>
                   {!state.shifts.some(
                     (s) =>
-                      s.date.startsWith(month) && absenceCodes.includes(s.code),
+                      belongsToMonth(s, month) && absenceCodes.includes(s.code),
                   ) && (
                     <div className="empty-state">
                       Brak nieobecności w tym miesiącu.
@@ -2380,19 +2406,24 @@ function PeriodCharts({ state, stats, month }) {
   const [person, setPerson] = useState("e0"),
     [kind, setKind] = useState("plan");
   const ds = dates(month),
-    e = state.employees.find((x) => x.id === person);
-  let total = 0,
-    benchmark = 0;
-  const series = ds.map((date) => {
-    let shifts = state.shifts.filter(
+    e = state.employees.find((x) => x.id === person),
+    period = monthPeriod(month),
+    work = state.shifts.filter(
       (s) =>
         s.employeeId === person &&
-        s.date === date &&
+        belongsToMonth(s, month) &&
         !absenceCodes.includes(s.code) &&
         s.code !== "W",
     );
+  let total = 0,
+    benchmark = 0;
+  const series = ds.map((date) => {
+    const day = dayPeriod(date);
+    const shifts = kind === "plan" ? work : work.filter((s) => s.date === date);
     total += shifts.reduce(
-      (a, s) => a + (kind === "plan" ? minutes(s) : (s.actualMinutes ?? 0)),
+      (a, s) =>
+        a +
+        (kind === "plan" ? minutesInPeriod(s, day) : (s.actualMinutes ?? 0)),
       0,
     );
     if (
@@ -2414,16 +2445,20 @@ function PeriodCharts({ state, stats, month }) {
     const ss = state.shifts.filter(
       (s) =>
         s.employeeId === e.id &&
-        s.date.startsWith(month) &&
+        belongsToMonth(s, month) &&
         effectiveAbsence(s),
     );
     return {
       ...e,
-      u: ss.filter((x) => x.code === "U").reduce((a, s) => a + minutes(s), 0),
+      u: ss
+        .filter((x) => x.code === "U")
+        .reduce((a, s) => a + minutesInPeriod(s, period), 0),
       uzHours: ss
         .filter((x) => x.code === "UŻ")
-        .reduce((a, s) => a + minutes(s), 0),
-      ch: ss.filter((x) => x.code === "CH").reduce((a, s) => a + minutes(s), 0),
+        .reduce((a, s) => a + minutesInPeriod(s, period), 0),
+      ch: ss
+        .filter((x) => x.code === "CH")
+        .reduce((a, s) => a + minutesInPeriod(s, period), 0),
     };
   });
   return (

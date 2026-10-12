@@ -1,6 +1,18 @@
 import ExcelJS from "exceljs";
-import { slots, summarize, validate } from "./domain.js";
+import {
+  slots,
+  summarize,
+  validate,
+  monthPeriod,
+  shiftPart,
+  minutesInPeriod,
+  belongsToMonth,
+  isWork,
+  effectiveAbsence,
+  minutes,
+} from "./domain.js";
 export async function createWorkbook(s, month, role) {
+  const period = monthPeriod(month);
   const wb = new ExcelJS.Workbook(),
     sensitive = ["manager", "hr"].includes(role);
   wb.creator = "Grafik Emisji";
@@ -28,19 +40,35 @@ export async function createWorkbook(s, month, role) {
   add(
     "Grafik",
     s.shifts
-      .filter((x) => x.date.startsWith(month))
-      .map((x) => ({
-        Pracownik: s.employees.find((e) => e.id === x.employeeId)?.name,
-        Data: x.date,
-        Kod:
-          !sensitive && ["U", "UŻ", "CH", "UB", "IN"].includes(x.code)
-            ? "Nieobecność"
-            : x.code,
-        Od: x.start,
-        Do: x.end,
-        Wykonanie_h:
-          x.actualMinutes === null ? null : (x.actualMinutes ?? 0) / 60,
-      })),
+      .filter((x) => belongsToMonth(x, month))
+      .map((x) => {
+        const part = shiftPart(x, period);
+        return {
+          Pracownik: s.employees.find((e) => e.id === x.employeeId)?.name,
+          Data: x.date,
+          Kod:
+            !sensitive && ["U", "UŻ", "CH", "UB", "IN"].includes(x.code)
+              ? "Nieobecność"
+              : x.code,
+          Od: x.start,
+          Do: x.end,
+          Wykonanie_h:
+            !x.date.startsWith(month) || x.actualMinutes === null
+              ? null
+              : (x.actualMinutes ?? 0) / 60,
+          Plan_h: isWork(x) ? minutesInPeriod(x, period) / 60 : 0,
+          ID_zmiany: x.id,
+          Poczatek_w_okresie: part?.start.toISO() ?? null,
+          Koniec_w_okresie: part?.end.toISO() ?? null,
+          Nieobecnosci_h: effectiveAbsence(x)
+            ? minutesInPeriod(x, period) / 60
+            : 0,
+          Uwagi_wykonanie:
+            x.actualMinutes > 0 && minutesInPeriod(x, period) !== minutes(x)
+              ? "Wykonanie bez podziału miesięcznego — brak rzeczywistych dat rozpoczęcia i zakończenia."
+              : "",
+        };
+      }),
   );
   add(
     "Podsumowanie",
@@ -51,6 +79,9 @@ export async function createWorkbook(s, month, role) {
       Wykonanie_h: x.actual / 60,
       Nieobecności_h: x.absent / 60,
       Punkty: x.points,
+      Status_wykonania: x.actualAllocationIncomplete
+        ? "Bez podziału zmiany między miesiące"
+        : "",
     })),
   );
   add("Walidacja", validate(s, month));

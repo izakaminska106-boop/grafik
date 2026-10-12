@@ -78,9 +78,41 @@ export function minutes(s) {
   let { start, end } = interval(s);
   return Math.round(end.diff(start, "minutes").minutes);
 }
-export function nightMinutes(s, nightStart = "22:00") {
+export function monthPeriod(month) {
+  const start = DateTime.fromISO(month + "-01", { zone: ZONE });
+  return { start, end: start.plus({ months: 1 }) };
+}
+export function dayPeriod(date) {
+  const start = DateTime.fromISO(date, { zone: ZONE });
+  return { start, end: start.plus({ days: 1 }) };
+}
+// A plan reporting fragment, never a second stored shift. Actual execution
+// cannot be split without its own start/end timestamps.
+export function shiftPart(s, period) {
+  if (!(minutes(s) > 0)) return null;
+  const full = interval(s);
+  const start = DateTime.max(full.start, period.start);
+  const end = DateTime.min(full.end, period.end);
+  if (!(end > start)) return null;
+  return {
+    id: s.id,
+    start,
+    end,
+    minutes: Math.round(end.diff(start, "minutes").minutes),
+  };
+}
+export function minutesInPeriod(s, period) {
+  return shiftPart(s, period)?.minutes ?? 0;
+}
+export function belongsToMonth(s, month) {
+  return s.date.startsWith(month) || minutesInPeriod(s, monthPeriod(month)) > 0;
+}
+export function nightMinutes(s, nightStart = "22:00", period) {
   if (!isWork(s)) return 0;
-  const { start, end } = interval(s);
+  const full = interval(s);
+  const start = period ? DateTime.max(full.start, period.start) : full.start;
+  const end = period ? DateTime.min(full.end, period.end) : full.end;
+  if (!(end > start)) return 0;
   let total = 0;
   for (
     let day = start.startOf("day").minus({ days: 1 });
@@ -126,18 +158,21 @@ export function taskIsCovered(task, shift) {
   return start.isValid && start >= work.start && end <= work.end;
 }
 export function summarize(state, month) {
+  const period = monthPeriod(month);
   return state.employees.map((e) => {
     const ss = state.shifts.filter(
-        (s) => s.employeeId === e.id && s.date.startsWith(month),
+        (s) => s.employeeId === e.id && belongsToMonth(s, month),
       ),
       work = ss.filter(isWork),
       abs = ss.filter(effectiveAbsence);
-    let planned = work.reduce((a, s) => a + minutes(s), 0),
-      absent = abs.reduce((a, s) => a + minutes(s), 0),
-      actual = work.reduce((a, s) => a + actualMinutes(s), 0),
+    let planned = work.reduce((a, s) => a + minutesInPeriod(s, period), 0),
+      absent = abs.reduce((a, s) => a + minutesInPeriod(s, period), 0),
+      actual = work
+        .filter((s) => s.date.startsWith(month))
+        .reduce((a, s) => a + actualMinutes(s), 0),
       leave = abs
         .filter((s) => ["U", "UŻ"].includes(s.code))
-        .reduce((a, s) => a + minutes(s), 0);
+        .reduce((a, s) => a + minutesInPeriod(s, period), 0);
     const points = state.tasks
       .filter(
         (t) =>
@@ -152,29 +187,50 @@ export function summarize(state, month) {
       planned,
       absent,
       actual,
+      actualAllocationIncomplete: work.some(
+        (s) =>
+          actualMinutes(s) > 0 && minutesInPeriod(s, period) !== minutes(s),
+      ),
       leave,
       night: work.reduce(
-        (a, s) => a + nightMinutes(s, state.settings.nightStart),
+        (a, s) => a + nightMinutes(s, state.settings.nightStart, period),
         0,
       ),
-      weekends: work.filter((s) => DateTime.fromISO(s.date).weekday > 5).length,
+      weekends: work.filter(
+        (s) => s.date.startsWith(month) && DateTime.fromISO(s.date).weekday > 5,
+      ).length,
       points,
-      uz: abs.filter((s) => s.code === "UŻ").length,
-      ill: abs.filter((s) => s.code === "CH").length,
+      uz: abs.filter((s) => s.date.startsWith(month) && s.code === "UŻ").length,
+      ill: abs.filter((s) => s.date.startsWith(month) && s.code === "CH")
+        .length,
     };
   });
 }
 export function coverageIntervals(state, date, knownWork) {
-  const weekend = DateTime.fromISO(date).weekday > 5,
-    holiday = holidays(Number(date.slice(0, 4))).includes(date),
-    req = holiday
+  const period = dayPeriod(date);
+  // Include yesterday's overnight requirements, then clip all demand to this
+  // calendar day. Overlapping requirements remain additive, as before.
+  const sourceDates = [period.start.minus({ days: 1 }).toISODate(), date];
+  const needs = sourceDates.flatMap((sourceDate) => {
+    const weekend = DateTime.fromISO(sourceDate).weekday > 5;
+    const holiday = holidays(Number(sourceDate.slice(0, 4))).includes(
+      sourceDate,
+    );
+    const req = holiday
       ? state.settings.holidayDemand
       : weekend
         ? state.settings.weekendDemand
         : state.settings.weekdayDemand;
-  const needs = req.map((r) => {
-    const i = interval({ date, ...r });
-    return { start: i.start.toMillis(), end: i.end.toMillis(), count: r.count };
+    return req
+      .map((r) => {
+        const i = interval({ date: sourceDate, ...r });
+        return {
+          start: Math.max(i.start.toMillis(), period.start.toMillis()),
+          end: Math.min(i.end.toMillis(), period.end.toMillis()),
+          count: r.count,
+        };
+      })
+      .filter((r) => r.end > r.start);
   });
   if (!needs.length) return [];
   const work =
