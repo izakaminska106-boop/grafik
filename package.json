@@ -10,7 +10,9 @@
     "start": "node server.js",
     "test": "node --test",
     "test:ui": "node scripts/smoke.mjs",
-    "backup": "node scripts/backup.mjs"
+    "backup": "node scripts/backup.mjs",
+    "build:pages": "node scripts/build-pages.mjs",
+    "test:pages": "node scripts/test-pages.mjs"
   },
   "repository": {
     "type": "git",

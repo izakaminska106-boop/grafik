@@ -56,6 +56,8 @@ import "@fontsource/dm-sans/latin-600.css";
 import "@fontsource/manrope/latin-700.css";
 import "@fontsource/manrope/latin-800.css";
 import "./style.css";
+import { demoRequest, exportDemo, DEMO_STORAGE_KEY } from "./browser-demo.js";
+const githubPages = import.meta.env.VITE_GITHUB_PAGES === "true";
 const fmt = (n) =>
   (n / 60).toLocaleString("pl-PL", { maximumFractionDigits: 1 });
 const nav = [
@@ -96,6 +98,7 @@ function App() {
     [sidebar, setSidebar] = useState(false),
     [undo, setUndo] = useState(null);
   const api = async (path, options = {}) => {
+    if (githubPages) return demoRequest(path, options, role);
     let r = await fetch("/api/" + path, {
       ...options,
       headers: {
@@ -114,6 +117,12 @@ function App() {
       .catch((e) => setToast(e.message));
   useEffect(() => {
     load();
+    if (!githubPages) return;
+    const update = (e) => {
+      if (e.key === DEMO_STORAGE_KEY) load();
+    };
+    window.addEventListener("storage", update);
+    return () => window.removeEventListener("storage", update);
   }, [role]);
   useEffect(() => {
     if (toast) {
@@ -196,11 +205,16 @@ function App() {
   }
   async function exportXlsx() {
     try {
-      const r = await fetch("/api/export?month=" + month, {
-        headers: { "x-demo-role": role },
-      });
-      if (!r.ok) throw Error("Błąd eksportu");
-      const url = URL.createObjectURL(await r.blob()),
+      let blob;
+      if (githubPages) blob = await exportDemo(month, role);
+      else {
+        const r = await fetch("/api/export?month=" + month, {
+          headers: { "x-demo-role": role },
+        });
+        if (!r.ok) throw Error("Błąd eksportu");
+        blob = await r.blob();
+      }
+      const url = URL.createObjectURL(blob),
         a = document.createElement("a");
       a.href = url;
       a.download = `Grafik-${month}.xlsx`;
@@ -515,6 +529,15 @@ function App() {
               )}
             </div>
           </div>
+          {githubPages && (
+            <div className="info-strip">
+              <Info size={17} />
+              <span>
+                Demo GitHub Pages · Twoje zmiany pozostają tylko w tej
+                przeglądarce. Używaj danych testowych.
+              </span>
+            </div>
+          )}
           {page === "dashboard" && (
             <>
               <div className="overview-banner">
@@ -1472,13 +1495,14 @@ function App() {
                   </div>
                 </div>
                 <div className="scope-note">
-                  Trwały zapis SQLite, wersjonowanie i kontrola konfliktu edycji
-                  działają. Role demonstracyjne nie zastępują logowania.
-                  Produkcja wymaga uwierzytelniania, uprawnień do konkretnych
-                  zespołów, pełnego rozliczenia prawnego, polityki kopii
-                  zapasowych i odbioru kadrowego. Nie przechowuj tutaj
-                  rzeczywistych danych zdrowotnych. Generator, import XLSX i
-                  integracje należą do kolejnych etapów.
+                  {githubPages ? "Zapis w przeglądarce" : "Trwały zapis SQLite"}
+                  , wersjonowanie i kontrola konfliktu edycji działają. Role
+                  demonstracyjne nie zastępują logowania. Produkcja wymaga
+                  uwierzytelniania, uprawnień do konkretnych zespołów, pełnego
+                  rozliczenia prawnego, polityki kopii zapasowych i odbioru
+                  kadrowego. Nie przechowuj tutaj rzeczywistych danych
+                  zdrowotnych. Generator, import XLSX i integracje należą do
+                  kolejnych etapów.
                 </div>
               </section>
             </>
@@ -1488,8 +1512,8 @@ function App() {
               grafik. <span>Więcej porządku. Lepszy rytm pracy.</span>
             </span>
             <span>
-              <span className="live-dot" /> Dane syntetyczne · zapis lokalny
-              SQLite
+              <span className="live-dot" /> Dane syntetyczne ·{" "}
+              {githubPages ? "zapis w przeglądarce" : "zapis lokalny SQLite"}
             </span>
           </footer>
         </main>

@@ -2,6 +2,21 @@
 
 Działająca aplikacja demonstracyjna na podstawie [PRD v1.0](docs/PRD_Grafik_Emisji.md). React + Vite, Express, SQLite (wbudowany moduł Node.js), Luxon i ExcelJS. Interfejs po polsku, sześć syntetycznych profili i przykładowy grafik października 2026. Czcionki są dostarczane lokalnie; aplikacja nie potrzebuje CDN ani kluczy API.
 
+## Podgląd na GitHub Pages
+
+Aplikację demonstracyjną można otworzyć pod adresem **https://izakaminska106-boop.github.io/grafik/**. Strona główna przekierowuje do gotowej aplikacji w `/grafik/site/`.
+
+Wersja Pages działa całkowicie w przeglądarce: sześć syntetycznych profili, edycja zmian, walidacja, zadania, historia, zastępstwa i eksport XLSX. Zmiany są zapisywane w `localStorage` konkretnej przeglądarki, nie w serwerowej bazie SQLite i nie są udostępniane innym użytkownikom. Historia demo zachowuje 20 ostatnich operacji. Wyczyść dane witryny, aby odtworzyć dane początkowe. Przełącznik ról służy demonstracji; nie wprowadzaj prawdziwych danych osobowych lub zdrowotnych.
+
+```sh
+npm run build:pages
+npm run test:pages
+```
+
+Budowanie tworzy pakiet `dist-pages/` i jego gotową kopię w `site/`. Kopia w `site/` jest celowo wersjonowana, żeby działała także istniejąca publikacja Pages z gałęzi `main`, katalogu głównego. Przy zmianie interfejsu przebuduj i zatwierdź `site/` razem ze źródłami. `.nojekyll` zapewnia bezpośrednie serwowanie plików. Workflow `.github/workflows/pages.yml` dodatkowo buduje i publikuje artefakt Pages przy aktualizacji `main`.
+
+Test Pages serwuje **wyłącznie pliki statyczne**, sprawdza wszystkie ekrany, edycję i przywracanie, trwałość po odświeżeniu i czytelny XLSX oraz potwierdza brak żądań do backendu. Pełna wersja z SQLite nadal uruchamia się zgodnie z instrukcją poniżej.
+
 ## Uruchomienie
 
 Wymagany **Node.js 24+** i npm. Z katalogu repozytorium:
