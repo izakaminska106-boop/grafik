@@ -48,6 +48,10 @@ import {
   dayPeriod,
   minutesInPeriod,
   belongsToMonth,
+  sicknessLeaveConflicts,
+  absenceMinutesInPeriod,
+  leaveYearSummary,
+  confirmedSickness,
 } from "./domain.js";
 import "@fontsource/dm-sans/latin-ext-400.css";
 import "@fontsource/dm-sans/latin-ext-500.css";
@@ -541,6 +545,17 @@ function App() {
               )}
             </div>
           </div>
+          {stats.some((s) => s.leaveInterrupted) && (
+            <div className="info-strip">
+              <Info size={17} />
+              <span>
+                Urlop przerwany z powodu choroby — art. 166 Kodeksu pracy.
+                Godziny objęte potwierdzonym CH wracają do salda.
+                Niewykorzystany urlop wymaga ustalenia późniejszego terminu;
+                termin nie jest wyznaczany automatycznie.
+              </span>
+            </div>
+          )}
           {stats.some((s) => s.actualAllocationIncomplete) && (
             <div className="info-strip">
               <Info size={17} />
@@ -1157,14 +1172,8 @@ function App() {
                       {s.leaveBalance !== undefined
                         ? fmt(
                             s.leaveBalance -
-                              state.shifts
-                                .filter(
-                                  (x) =>
-                                    x.employeeId === s.id &&
-                                    x.date.startsWith(month.slice(0, 4)) &&
-                                    ["U", "UŻ"].includes(x.code),
-                                )
-                                .reduce((a, x) => a + minutes(x), 0),
+                              leaveYearSummary(state, s.id, month.slice(0, 4))
+                                .used,
                           )
                         : "—"}{" "}
                       <span>h</span>
@@ -1219,13 +1228,26 @@ function App() {
                               </button>
                             </td>
                             <td>
-                              {fmt(minutesInPeriod(s, monthPeriod(month)))} h w
-                              miesiącu · {s.start}–{s.end}
+                              {fmt(
+                                absenceMinutesInPeriod(
+                                  s,
+                                  monthPeriod(month),
+                                  sicknessLeaveConflicts(state),
+                                ),
+                              )}{" "}
+                              h rozliczonych w miesiącu · podstawa {s.start}–
+                              {s.end}
                             </td>
                             <td>
                               {s.code === "CH"
-                                ? "Potwierdzona nieobecność"
-                                : s.requestStatus || "zaakceptowany"}
+                                ? confirmedSickness(s)
+                                  ? "Potwierdzona nieobecność — cały dzień"
+                                  : "Wymaga weryfikacji przez kadry"
+                                : sicknessLeaveConflicts(state).some(
+                                      (c) => c.leave.id === s.id,
+                                    )
+                                  ? "Urlop przerwany z powodu choroby — art. 166 Kodeksu pracy"
+                                  : s.requestStatus || "zaakceptowany"}
                             </td>
                             <td>
                               <button
@@ -1625,6 +1647,7 @@ function App() {
             )}
             {modal.type === "shift" && (
               <ShiftForm
+                role={role}
                 data={modal.data}
                 employees={state.employees}
                 loading={loading}
@@ -1837,7 +1860,15 @@ function Coverage({ cov, monthLabel, onDay }) {
     </section>
   );
 }
-function ShiftForm({ data, employees, onSave, onDelete, onCopy, loading }) {
+function ShiftForm({
+  data,
+  employees,
+  onSave,
+  onDelete,
+  onCopy,
+  loading,
+  role,
+}) {
   const [d, setD] = useState(data);
   const update = (key, value) => setD((x) => ({ ...x, [key]: value }));
   const isAbs = absenceCodes.includes(d.code);
@@ -1883,6 +1914,14 @@ function ShiftForm({ data, employees, onSave, onDelete, onCopy, loading }) {
               setD((x) => ({
                 ...x,
                 code,
+                ...(code === "CH"
+                  ? {
+                      sicknessStatus:
+                        x.code === "CH"
+                          ? (x.sicknessStatus ?? "confirmed")
+                          : "reported",
+                    }
+                  : {}),
                 originalCode: isAbs ? x.originalCode : x.code,
                 originalActualMinutes: isAbs
                   ? x.originalActualMinutes
@@ -1982,6 +2021,31 @@ function ShiftForm({ data, employees, onSave, onDelete, onCopy, loading }) {
           />
           Nieobecność w dniu pierwotnie wolnym (0 h)
         </label>
+      )}
+      {d.code === "CH" && (
+        <>
+          <div className="form-info">
+            CH obejmuje cały wskazany dzień kalendarzowy. Godziny „Pierwotny
+            plan” są podstawą rozliczenia, nie godzinami trwania choroby.
+            Kilkudniową chorobę wprowadź dla każdej daty, zachowując jej
+            podstawę planową.
+          </div>
+          <label>
+            Potwierdzenie choroby
+            <select
+              value={d.sicknessStatus ?? "confirmed"}
+              onChange={(e) => update("sicknessStatus", e.target.value)}
+            >
+              <option value="reported">Wymaga weryfikacji przez kadry</option>
+              <option
+                value="confirmed"
+                disabled={role !== "hr" && !confirmedSickness(data)}
+              >
+                Potwierdzona niezdolność do pracy (Kadry)
+              </option>
+            </select>
+          </label>
+        </>
       )}
       {isAbs && d.code !== "CH" && (
         <label>
@@ -2408,6 +2472,7 @@ function PeriodCharts({ state, stats, month }) {
   const ds = dates(month),
     e = state.employees.find((x) => x.id === person),
     period = monthPeriod(month),
+    conflicts = sicknessLeaveConflicts(state),
     work = state.shifts.filter(
       (s) =>
         s.employeeId === person &&
@@ -2452,13 +2517,13 @@ function PeriodCharts({ state, stats, month }) {
       ...e,
       u: ss
         .filter((x) => x.code === "U")
-        .reduce((a, s) => a + minutesInPeriod(s, period), 0),
+        .reduce((a, s) => a + absenceMinutesInPeriod(s, period, conflicts), 0),
       uzHours: ss
         .filter((x) => x.code === "UŻ")
-        .reduce((a, s) => a + minutesInPeriod(s, period), 0),
+        .reduce((a, s) => a + absenceMinutesInPeriod(s, period, conflicts), 0),
       ch: ss
         .filter((x) => x.code === "CH")
-        .reduce((a, s) => a + minutesInPeriod(s, period), 0),
+        .reduce((a, s) => a + absenceMinutesInPeriod(s, period, conflicts), 0),
     };
   });
   return (

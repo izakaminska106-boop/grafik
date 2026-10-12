@@ -132,15 +132,28 @@ export function nightMinutes(s, nightStart = "22:00", period) {
   }
   return Math.round(total);
 }
+export function confirmedSickness(s) {
+  // Legacy CH entries were registered as confirmed absence (PRD §6).
+  return s.code === "CH" && (s.sicknessStatus ?? "confirmed") === "confirmed";
+}
 export function effectiveAbsence(s) {
+  if (typeof s.accountingIsAbsence === "boolean") return s.accountingIsAbsence;
   return (
     absenceCodes.includes(s.code) &&
-    (s.code === "CH" || !s.requestStatus || s.requestStatus === "zaakceptowany")
+    (s.code === "CH"
+      ? confirmedSickness(s)
+      : !s.requestStatus || s.requestStatus === "zaakceptowany")
   );
 }
 export function isWork(s) {
+  if (typeof s.accountingIsWork === "boolean") return s.accountingIsWork;
   return (
     s.code !== "W" &&
+    !(
+      s.code === "CH" &&
+      !confirmedSickness(s) &&
+      (!s.originalCode || s.sourceLeaveId)
+    ) &&
     !effectiveAbsence(s) &&
     (!absenceCodes.includes(s.code) || s.originalCode !== "W")
   );
@@ -157,8 +170,121 @@ export function taskIsCovered(task, shift) {
     work = interval(shift);
   return start.isValid && start >= work.start && end <= work.end;
 }
+// CH covers its calendar date; start/end remain the lost planned-hours basis.
+export function absenceInterval(s) {
+  if (s.accountingAbsenceInterval)
+    return {
+      start: DateTime.fromISO(s.accountingAbsenceInterval.start),
+      end: DateTime.fromISO(s.accountingAbsenceInterval.end),
+    };
+  return s.code === "CH" ? dayPeriod(s.date) : interval(s);
+}
+const overlaps = (a, b) => a.start < b.end && a.end > b.start;
+export function sicknessLeaveConflicts(state) {
+  const sick = state.shifts.filter(confirmedSickness);
+  const leave = state.shifts.filter(
+    (s) => ["U", "UŻ"].includes(s.code) && effectiveAbsence(s),
+  );
+  return leave.flatMap((l) =>
+    sick
+      .filter(
+        (ch) =>
+          ch.employeeId === l.employeeId &&
+          (ch.date === l.date || overlaps(dayPeriod(ch.date), interval(l))),
+      )
+      .map((ch) => ({
+        sick: ch,
+        leave: l,
+        disputed: dayPeriod(ch.date),
+      })),
+  );
+}
+export function absenceAccountingIntervals(s, conflicts) {
+  if (s.accountingIntervals)
+    return s.accountingIntervals.map((r) => ({
+      start: DateTime.fromISO(r.start),
+      end: DateTime.fromISO(r.end),
+    }));
+  if (!effectiveAbsence(s) || !(minutes(s) > 0)) return [];
+  const basisPeriod = s.code === "CH" ? dayPeriod(s.date) : interval(s);
+  const part = shiftPart(s, basisPeriod);
+  if (!part) return [];
+  const excluded = conflicts
+    .filter((c) => c.leave.id === s.id)
+    .map((c) => ({
+      start: DateTime.max(part.start, c.disputed.start),
+      end: DateTime.min(part.end, c.disputed.end),
+    }))
+    .filter((r) => r.end > r.start)
+    .sort((a, b) => a.start - b.start);
+  const result = [];
+  let cursor = part.start;
+  for (const r of excluded) {
+    if (r.start > cursor) result.push({ start: cursor, end: r.start });
+    cursor = DateTime.max(cursor, r.end);
+  }
+  if (part.end > cursor) result.push({ start: cursor, end: part.end });
+  return result;
+}
+export function absenceMinutesInPeriod(s, period, conflicts) {
+  // Confirmed CH interrupts leave only within its calendar date. The source
+  // request remains intact; its hours outside the CH date stay charged.
+  return Math.round(
+    absenceAccountingIntervals(s, conflicts).reduce(
+      (total, r) =>
+        total +
+        Math.max(
+          0,
+          DateTime.min(r.end, period.end).toMillis() -
+            DateTime.max(r.start, period.start).toMillis(),
+        ) /
+          60000,
+      0,
+    ),
+  );
+}
+export function absenceReviewInPeriod(conflicts, period) {
+  return conflicts.some(
+    (c) =>
+      overlaps(interval(c.leave), period) ||
+      overlaps(dayPeriod(c.sick.date), period),
+  );
+}
+export function leaveYearSummary(
+  state,
+  employeeId,
+  year,
+  conflicts = sicknessLeaveConflicts(state),
+) {
+  const start = DateTime.fromISO(year + "-01-01", { zone: ZONE });
+  const period = { start, end: start.plus({ years: 1 }) };
+  const relevant = conflicts.filter((c) => c.leave.employeeId === employeeId);
+  const leave = state.shifts.filter(
+    (s) =>
+      s.employeeId === employeeId &&
+      s.date.startsWith(year) &&
+      ["U", "UŻ"].includes(s.code) &&
+      effectiveAbsence(s),
+  );
+  const used = leave.reduce(
+    (a, s) =>
+      a +
+      absenceMinutesInPeriod(
+        s,
+        { start: interval(s).start, end: interval(s).end },
+        relevant,
+      ),
+    0,
+  );
+  return {
+    used,
+    restored: leave.reduce((a, s) => a + minutes(s), 0) - used,
+    interrupted: absenceReviewInPeriod(relevant, period),
+  };
+}
 export function summarize(state, month) {
-  const period = monthPeriod(month);
+  const period = monthPeriod(month),
+    conflicts = sicknessLeaveConflicts(state);
   return state.employees.map((e) => {
     const ss = state.shifts.filter(
         (s) => s.employeeId === e.id && belongsToMonth(s, month),
@@ -166,13 +292,16 @@ export function summarize(state, month) {
       work = ss.filter(isWork),
       abs = ss.filter(effectiveAbsence);
     let planned = work.reduce((a, s) => a + minutesInPeriod(s, period), 0),
-      absent = abs.reduce((a, s) => a + minutesInPeriod(s, period), 0),
+      absent = abs.reduce(
+        (a, s) => a + absenceMinutesInPeriod(s, period, conflicts),
+        0,
+      ),
       actual = work
         .filter((s) => s.date.startsWith(month))
         .reduce((a, s) => a + actualMinutes(s), 0),
       leave = abs
         .filter((s) => ["U", "UŻ"].includes(s.code))
-        .reduce((a, s) => a + minutesInPeriod(s, period), 0);
+        .reduce((a, s) => a + absenceMinutesInPeriod(s, period, conflicts), 0);
     const points = state.tasks
       .filter(
         (t) =>
@@ -186,6 +315,14 @@ export function summarize(state, month) {
       nominal: nominal(month, e.fte),
       planned,
       absent,
+      leaveInterrupted: absenceReviewInPeriod(
+        conflicts.filter((c) => c.leave.employeeId === e.id),
+        period,
+      ),
+      interruptedLeave:
+        abs
+          .filter((s) => ["U", "UŻ"].includes(s.code))
+          .reduce((a, s) => a + minutesInPeriod(s, period), 0) - leave,
       actual,
       actualAllocationIncomplete: work.some(
         (s) =>
@@ -298,6 +435,8 @@ export function coverage(state, month) {
   });
 }
 export function validate(state, month) {
+  const period = monthPeriod(month),
+    conflicts = sicknessLeaveConflicts(state);
   let out = [];
   const add = (severity, employee, date, rule, detail, basis, fix) =>
     out.push({ severity, employee, date, rule, detail, basis, fix });
@@ -320,6 +459,18 @@ export function validate(state, month) {
       "Profil zakładowy oraz reguły wyjątków nie zostały zatwierdzone.",
       "PRD §5",
       "Uzyskaj zatwierdzenie profilu i dodatkowych testów przez kadry.",
+    );
+  for (const s of state.shifts.filter(
+    (s) => s.code === "CH" && !confirmedSickness(s) && s.date.startsWith(month),
+  ))
+    add(
+      "warning",
+      state.employees.find((e) => e.id === s.employeeId)?.name ?? "Cały zespół",
+      s.date,
+      "Wymaga weryfikacji przez kadry",
+      `Niepotwierdzone zgłoszenie choroby ${s.id}, ${s.date}. Nie przerywa automatycznie urlopu i nie odlicza godzin CH.`,
+      "PRD §6",
+      "Kadry potwierdzają okres niezdolności do pracy przed rozliczeniem.",
     );
   const summaries = summarize(state, month);
   for (const e of state.employees) {
@@ -346,6 +497,26 @@ export function validate(state, month) {
             "Przesuń początek zmiany lub wybierz zastępstwo.",
           );
       }
+      const collidingAbsences = state.shifts.filter(
+        (a) =>
+          a.id !== s.id &&
+          a.employeeId === e.id &&
+          effectiveAbsence(a) &&
+          overlaps(absenceInterval(a), cur) &&
+          (a.code === "CH" || a.accountingAbsenceInterval
+            ? belongsToMonth(s, month)
+            : s.date.startsWith(month)),
+      );
+      if (collidingAbsences.length)
+        add(
+          "error",
+          e.name,
+          s.date.startsWith(month) ? s.date : collidingAbsences[0].date,
+          "Praca podczas nieobecności",
+          `Zmiana ${s.id}: ${cur.start.toISO()}–${cur.end.toISO()} koliduje z nieobecnością: ${collidingAbsences.map((a) => `${a.code} ${a.date}${a.code === "CH" ? " (cały dzień kalendarzowy)" : ""}`).join(", ")}.`,
+          "PRD §6 i §11",
+          "Wyznacz zastępstwo; zachowaj pierwotny plan i historię.",
+        );
       if (!s.date.startsWith(month)) continue;
       const len = minutes(s);
       if (len > Math.min(720, e.maxDaily ?? 720))
@@ -380,25 +551,6 @@ export function validate(state, month) {
             "Sprawdź rozkład i podstawę ewentualnego ruchomego czasu pracy.",
           );
       }
-      if (
-        state.shifts.some(
-          (a) =>
-            a.id !== s.id &&
-            a.employeeId === e.id &&
-            effectiveAbsence(a) &&
-            interval(a).start < cur.end &&
-            interval(a).end > cur.start,
-        )
-      )
-        add(
-          "error",
-          e.name,
-          s.date,
-          "Praca podczas nieobecności",
-          "Zmiana koliduje z nieobecnością.",
-          "PRD §11",
-          "Wyznacz zastępstwo.",
-        );
     }
     const year = month.slice(0, 4),
       abs = state.shifts.filter(
@@ -407,9 +559,21 @@ export function validate(state, month) {
           s.date.startsWith(year) &&
           effectiveAbsence(s),
       ),
-      used = abs
-        .filter((s) => ["U", "UŻ"].includes(s.code))
-        .reduce((a, s) => a + minutes(s), 0);
+      used = leaveYearSummary(state, e.id, year, conflicts).used;
+    for (const conflict of conflicts.filter(
+      (c) => c.leave.employeeId === e.id && absenceReviewInPeriod([c], period),
+    ))
+      add(
+        "warning",
+        e.name,
+        conflict.sick.date.startsWith(month)
+          ? conflict.sick.date
+          : conflict.leave.date,
+        "Urlop przerwany z powodu choroby",
+        `CH ${conflict.sick.date} (ID ${conflict.sick.id}) koliduje z ${conflict.leave.code} ${conflict.leave.date} (ID ${conflict.leave.id}). Urlop przerwany z powodu choroby — art. 166 Kodeksu pracy. Godziny urlopu objęte CH nie pomniejszają salda; pierwotny wniosek pozostaje w historii.`,
+        "Art. 166 KP; PRD §6",
+        "Kadry weryfikują rozliczenie i ustalają termin niewykorzystanego urlopu; bez automatycznego przedłużenia.",
+      );
     if (used > e.leaveBalance)
       add(
         "error",
