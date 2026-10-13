@@ -453,9 +453,9 @@ function App() {
             Ustawienia
           </button>
           <div className="profile">
-            <span className="avatar profile-avatar">IK</span>
+            <span className="avatar profile-avatar">DE</span>
             <div>
-              <b>Izabela Kamińska</b>
+              <b>Profil demonstracyjny</b>
               <select
                 aria-label="Rola demonstracyjna"
                 value={role}
@@ -570,8 +570,9 @@ function App() {
             <div className="info-strip">
               <Info size={17} />
               <span>
-                Demo GitHub Pages · Twoje zmiany pozostają tylko w tej
-                przeglądarce. Używaj danych testowych.
+                BETA · Wersja demonstracyjna. Nie służy do zatwierdzania
+                rzeczywistych grafików. Twoje zmiany pozostają tylko w tej
+                przeglądarce. Używaj wyłącznie danych syntetycznych.
               </span>
             </div>
           )}

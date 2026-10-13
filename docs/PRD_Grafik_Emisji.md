@@ -1,6 +1,6 @@
 # PRD aplikacji Grafik Emisji
 
-Wersja 1.0 • 12 października 2026 • Business Owner: Izabela Kamińska
+Wersja 1.0 • 12 października 2026 • Business Owner: Właściciel produktu
 
 ## 1. Cel i rezultat
 
